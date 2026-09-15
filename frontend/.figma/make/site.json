@@ -1,0 +1,10 @@
+{
+  "description": "Engage your curiosity with a science trivia app featuring multiple choice questions and educational explanations, perfect for learners and trivia enthusiasts.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
