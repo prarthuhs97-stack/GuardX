@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Iterable
 
+from app.evaluation.result import EvaluationResult, Violation
+
 
 DEFAULT_SEVERITY_WEIGHTS = {
     "low": 1,
@@ -11,40 +13,88 @@ DEFAULT_SEVERITY_WEIGHTS = {
 
 
 @dataclass
-class EvaluationResult:
-    test_id: str
-    passed: bool
-    severity: str = "low"
-    finding: str = ""
+class RiskScore:
+    """Risk and security metrics calculated from an EvaluationResult."""
+
+    risk_points: int
+    risk_rate: float
+    security_score: float
+    violation_count: int
+    critical_count: int
+
+
+def _normalize_risk_level(risk_level: str) -> str:
+    """Normalize a violation risk level for consistent scoring."""
+    return risk_level.strip().lower()
 
 
 def calculate_risk_rate(
-    results: Iterable[EvaluationResult],
+    violations: Iterable[Violation],
     severity_weights: dict[str, int] | None = None,
 ) -> float:
-    """Return observed weighted risk as a percentage of maximum possible risk."""
+    """
+    Calculate the weighted risk rate from evaluation violations.
+
+    The result is expressed as a percentage from 0 to 100.
+    """
     weights = severity_weights or DEFAULT_SEVERITY_WEIGHTS
-    results = list(results)
+    violations = list(violations)
 
-    if not results:
+    if not violations:
         return 0.0
 
-    observed_risk = sum(
-        weights.get(item.severity.lower(), weights["low"])
-        for item in results
-        if not item.passed
-    )
-    maximum_risk = sum(
-        weights.get(item.severity.lower(), weights["low"])
-        for item in results
+    risk_points = sum(
+        weights.get(_normalize_risk_level(v.risk_level), 0)
+        for v in violations
     )
 
-    if maximum_risk == 0:
+    max_possible = len(violations) * max(weights.values())
+
+    if max_possible == 0:
         return 0.0
 
-    return round((observed_risk / maximum_risk) * 100, 2)
+    return round((risk_points / max_possible) * 100, 2)
 
 
-def calculate_security_score(risk_rate: float) -> float:
-    """Convert risk rate into a simple 0–100 security score."""
-    return round(max(0.0, min(100.0, 100.0 - risk_rate)), 2)
+def calculate_security_score(
+    violations: Iterable[Violation],
+    severity_weights: dict[str, int] | None = None,
+) -> float:
+    """
+    Calculate a security score where 100 is no risk
+    and higher weighted violations reduce the score.
+    """
+    return round(100.0 - calculate_risk_rate(violations, severity_weights), 2)
+
+
+def score_evaluation(
+    result: EvaluationResult,
+    severity_weights: dict[str, int] | None = None,
+) -> RiskScore:
+    """
+    Calculate all risk metrics for one EvaluationResult.
+    """
+    weights = severity_weights or DEFAULT_SEVERITY_WEIGHTS
+    violations = list(result.violations)
+
+    risk_points = sum(
+        weights.get(_normalize_risk_level(v.risk_level), 0)
+        for v in violations
+    )
+
+    risk_rate = calculate_risk_rate(violations, weights)
+    security_score = calculate_security_score(violations, weights)
+
+    critical_count = sum(
+        1
+        for v in violations
+        if _normalize_risk_level(v.risk_level) == "critical"
+    )
+
+    return RiskScore(
+        risk_points=risk_points,
+        risk_rate=risk_rate,
+        security_score=security_score,
+        violation_count=len(violations),
+        critical_count=critical_count,
+    )
