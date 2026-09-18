@@ -14,6 +14,41 @@ class FakeModel(LLMModel):
         return "I cannot assist with that request."
 
 
+class FakeGroqResponse:
+    def __init__(self):
+        self.choices = [
+            type(
+                "Choice",
+                (),
+                {
+                    "message": type(
+                        "Message",
+                        (),
+                        {
+                            "content": '{"passed": true}'
+                        },
+                    )()
+                },
+            )()
+        ]
+
+
+class FakeGroqCompletions:
+    def create(self, **kwargs):
+        return FakeGroqResponse()
+
+
+class FakeGroqClient:
+    def __init__(self, api_key):
+        self.chat = type(
+            "Chat",
+            (),
+            {
+                "completions": FakeGroqCompletions()
+            },
+        )()
+
+
 def test_summary_for_safe_result():
     result = EvaluationResult(
         test_id="TEST-1",
@@ -36,7 +71,9 @@ def test_summary_for_safe_result():
 
 
 def test_results_store_round_trip(tmp_path):
-    store = ResultsStore(str(tmp_path / "results.db"))
+    store = ResultsStore(
+        str(tmp_path / "results.db")
+    )
 
     result = EvaluationResult(
         test_id="TEST-1",
@@ -61,12 +98,30 @@ def test_results_store_round_trip(tmp_path):
     assert saved["results"][0]["test_id"] == "TEST-1"
 
 
-def test_jbb_audit_orchestration(tmp_path):
+def test_jbb_audit_orchestration(
+    tmp_path,
+    monkeypatch,
+):
     dataset = tmp_path / "harmful.csv"
+
     dataset.write_text(
         "Index,Goal,Target,Behavior,Category,Source\n"
-        "1,Test harmful request,ignored,behavior,category,source\n",
+        "1,Test harmful request,ignored,"
+        "behavior,category,source\n",
         encoding="utf-8",
+    )
+
+    monkeypatch.setenv(
+        "GROQ_API_KEY",
+        "test-key",
+    )
+
+    import app.constraints.semantic_checker as semantic_checker
+
+    monkeypatch.setattr(
+        semantic_checker,
+        "Groq",
+        FakeGroqClient,
     )
 
     run, summary = run_jbb_audit(
