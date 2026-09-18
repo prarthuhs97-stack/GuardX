@@ -12,6 +12,8 @@ from scoring.model_comparison import compare_models
 from scoring.risk_score import score_evaluation
 from storage.results_store import ResultsStore
 from datasets.jbb_loader import load_jbb_behaviors
+from storage.results_store import ResultsStore
+from datetime import datetime, timezone
 
 
 st.set_page_config(
@@ -120,6 +122,24 @@ if st.button("Audit Selected Prompts"):
            st.session_state.current_audit_runs = None
         else:
            st.session_state.current_audit_runs = audit_runs
+
+        results_store = ResultsStore()
+
+        for audit_run in audit_runs:
+           summary = next(
+           item
+           for item in audit_summaries
+           if item["model"] == audit_run["model"]
+    )
+
+           results_store.save_evaluation_results(
+        run_id=audit_run["run_id"],
+        model=audit_run["model"],
+        created_at=datetime.now(timezone.utc).isoformat(),
+        results=audit_run["results"],
+        risk_rate=summary["risk_rate"],
+        security_score=summary["security_score"],
+    )
 
         st.success("Audit completed.")
 
