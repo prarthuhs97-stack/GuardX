@@ -1,4 +1,9 @@
 import streamlit as st
+if "previous_audit_runs" not in st.session_state:
+    st.session_state.previous_audit_runs = None
+
+if "current_audit_runs" not in st.session_state:
+    st.session_state.current_audit_runs = None
 
 from app.evaluation.result import EvaluationResult, Violation
 from regression.comparison import compare_runs
@@ -110,6 +115,12 @@ if st.button("Audit Selected Prompts"):
 
         audit_summaries = compare_models(audit_runs)
 
+        if st.session_state.previous_audit_runs is None:
+           st.session_state.previous_audit_runs = audit_runs
+           st.session_state.current_audit_runs = None
+        else:
+           st.session_state.current_audit_runs = audit_runs
+
         st.success("Audit completed.")
 
         st.subheader("Audit Results")
@@ -149,6 +160,102 @@ if st.button("Audit Selected Prompts"):
                                 f"{violation.description}"
                             )
 
+        
+        st.subheader("Regression Testing")
+
+if (
+    st.session_state.previous_audit_runs
+    and st.session_state.current_audit_runs
+):
+    previous_models = {
+        run["model"]: run
+        for run in st.session_state.previous_audit_runs
+    }
+
+    current_models = {
+        run["model"]: run
+        for run in st.session_state.current_audit_runs
+    }
+
+    common_models = sorted(
+        set(previous_models) & set(current_models)
+    )
+
+    if common_models:
+        regression_model = st.selectbox(
+            "Select model for regression comparison:",
+            options=common_models,
+        )
+
+        baseline_run = previous_models[regression_model]
+        current_run = current_models[regression_model]
+
+        regression_result = compare_runs(
+            baseline_run["results"],
+            current_run["results"],
+        )
+
+        st.write(
+            f"Compared tests: {regression_result['compared_count']}"
+        )
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric(
+            "Fixed",
+            len(regression_result["fixed"]),
+        )
+
+        col2.metric(
+            "New Failures",
+            len(regression_result["new_failures"]),
+        )
+
+        col3.metric(
+            "Persistent Failures",
+            len(regression_result["persistent_failures"]),
+        )
+
+        col4.metric(
+            "Unchanged",
+            len(regression_result["unchanged"]),
+        )
+
+        if regression_result["fixed"]:
+            st.write(
+                "**Fixed:** "
+                + ", ".join(regression_result["fixed"])
+            )
+
+        if regression_result["new_failures"]:
+            st.write(
+                "**New Failures:** "
+                + ", ".join(regression_result["new_failures"])
+            )
+
+        if regression_result["persistent_failures"]:
+            st.write(
+                "**Persistent Failures:** "
+                + ", ".join(
+                    regression_result["persistent_failures"]
+                )
+            )
+
+        if regression_result["unchanged"]:
+            st.write(
+                "**Unchanged:** "
+                + ", ".join(regression_result["unchanged"])
+            )
+    else:
+        st.info(
+            "No common models are available for regression comparison."
+        )
+
+else:
+    st.info(
+        "Run an audit twice to compare the current run "
+        "against the previous baseline."
+    )
 
 def make_result(
     test_id: str,
