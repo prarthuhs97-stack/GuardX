@@ -1,4 +1,5 @@
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -99,7 +100,7 @@ audit_mode = st.radio(
 
 
 # -------------------------------------------------------------------
-# Select prompts according to audit mode
+# Prompt selection
 # -------------------------------------------------------------------
 
 selected_test_cases = []
@@ -107,7 +108,9 @@ selected_test_cases = []
 
 if audit_mode == "Single Prompt":
 
-    st.write("Select one adversarial prompt to test.")
+    st.write(
+        "Select one adversarial prompt to test."
+    )
 
     categories = sorted(
         {
@@ -125,8 +128,11 @@ if audit_mode == "Single Prompt":
     )
 
     if selected_category == "All":
+
         filtered_test_cases = jbb_test_cases
+
     else:
+
         filtered_test_cases = [
             test
             for test in jbb_test_cases
@@ -151,10 +157,12 @@ if audit_mode == "Single Prompt":
         if test.test_id == selected_test_id
     ]
 
+
 elif audit_mode == "Category Batch":
 
     st.write(
-        "Run multiple adversarial prompts from one JBB category."
+        "Run multiple adversarial prompts "
+        "from one JBB category."
     )
 
     categories = sorted(
@@ -189,17 +197,20 @@ elif audit_mode == "Category Batch":
         value=min(5, len(category_cases)),
     )
 
-    selected_test_cases = category_cases[:batch_size]
+    selected_test_cases = category_cases[
+        :batch_size
+    ]
 
     st.write(
         f"Selected {len(selected_test_cases)} "
         f"prompts from `{selected_category}`."
     )
 
+
 else:
 
     st.write(
-        "Run the complete JBB harmful-behaviors dataset."
+        "Run the JBB harmful-behaviors dataset."
     )
 
     batch_size = st.slider(
@@ -208,12 +219,14 @@ else:
         max_value=len(jbb_test_cases),
         value=min(10, len(jbb_test_cases)),
         help=(
-            "Increase this to 100 to run the complete "
-            "harmful-behaviors dataset."
+            "Set this to 100 to run the "
+            "complete JBB dataset."
         ),
     )
 
-    selected_test_cases = jbb_test_cases[:batch_size]
+    selected_test_cases = jbb_test_cases[
+        :batch_size
+    ]
 
     st.write(
         f"Selected {len(selected_test_cases)} "
@@ -222,23 +235,30 @@ else:
 
 
 # -------------------------------------------------------------------
-# Show selected prompts
+# Selected prompt preview
 # -------------------------------------------------------------------
 
 if selected_test_cases:
 
     with st.expander(
-        f"View selected prompts ({len(selected_test_cases)})"
+        f"View selected prompts "
+        f"({len(selected_test_cases)})"
     ):
+
         for test in selected_test_cases:
 
-            category = test.constraints[0].metadata.get(
-                "category",
-                "Unknown",
+            category = (
+                test.constraints[0]
+                .metadata
+                .get(
+                    "category",
+                    "Unknown",
+                )
             )
 
             st.write(
-                f"**{test.test_id}** — `{category}`"
+                f"**{test.test_id}** — "
+                f"`{category}`"
             )
 
             st.caption(test.prompt)
@@ -266,7 +286,7 @@ selected_models = st.multiselect(
 
 
 # -------------------------------------------------------------------
-# Run audit
+# Audit execution
 # -------------------------------------------------------------------
 
 st.subheader("Run Audit")
@@ -277,12 +297,14 @@ if st.button(
 ):
 
     if not selected_test_cases:
+
         st.warning(
             "Select at least one prompt."
         )
         st.stop()
 
     if not selected_models:
+
         st.warning(
             "Select at least one model."
         )
@@ -290,12 +312,14 @@ if st.button(
 
     audit_runs = []
 
-    progress = st.progress(
+    overall_progress = st.progress(
         0,
-        text="Starting audit...",
+        text="Preparing audit...",
     )
 
-    total_models = len(selected_models)
+    total_models = len(
+        selected_models
+    )
 
     for model_index, model_name in enumerate(
         selected_models,
@@ -303,24 +327,74 @@ if st.button(
     ):
 
         st.write(
-            f"Running audit for **{model_name}**..."
+            f"### Running {model_name}"
         )
+
+        model_progress = st.progress(
+            0,
+            text=(
+                f"Starting {model_name}..."
+            ),
+        )
+
+        status_placeholder = st.empty()
+
+        def update_progress(
+            completed,
+            total,
+            test_id,
+            latency_ms,
+        ):
+            percentage = (
+                completed / total
+                if total
+                else 1.0
+            )
+
+            model_progress.progress(
+                percentage,
+                text=(
+                    f"{model_name}: "
+                    f"{completed}/{total} "
+                    f"tests completed"
+                ),
+            )
+
+            status_placeholder.caption(
+                f"Latest test: `{test_id}` "
+                f"| Model latency: "
+                f"{latency_ms:.2f} ms"
+            )
 
         try:
 
-            model = GroqAdapter(model_name)
+            model = GroqAdapter(
+                model_name
+            )
 
             model_run = run_model(
                 model=model,
                 test_cases=selected_test_cases,
+                progress_callback=update_progress,
             )
 
         except Exception as exc:
 
             st.error(
-                f"Audit failed for {model_name}: {exc}"
+                f"Audit failed for "
+                f"{model_name}: {exc}"
             )
+
             continue
+
+        model_progress.progress(
+            1.0,
+            text=(
+                f"{model_name}: "
+                f"completed all "
+                f"{len(selected_test_cases)} tests"
+            ),
+        )
 
         timestamp = datetime.now(
             timezone.utc
@@ -343,10 +417,15 @@ if st.button(
             }
         )
 
-        progress.progress(
-            model_index / total_models,
+        overall_percentage = (
+            model_index / total_models
+        )
+
+        overall_progress.progress(
+            overall_percentage,
             text=(
-                f"Completed {model_name}"
+                f"Completed "
+                f"{model_index}/{total_models} models"
             ),
         )
 
@@ -369,13 +448,18 @@ if st.button(
     # Regression state
     # ---------------------------------------------------------------
 
-    if st.session_state.previous_audit_runs is None:
+    if (
+        st.session_state.previous_audit_runs
+        is None
+    ):
 
         st.session_state.previous_audit_runs = (
             audit_runs
         )
 
-        st.session_state.current_audit_runs = None
+        st.session_state.current_audit_runs = (
+            None
+        )
 
         is_baseline_run = True
 
@@ -431,16 +515,22 @@ if st.button(
 
 
 # -------------------------------------------------------------------
-# Determine displayed audit
+# Display most recent audit
 # -------------------------------------------------------------------
 
-if st.session_state.current_audit_runs is not None:
+if (
+    st.session_state.current_audit_runs
+    is not None
+):
 
     displayed_runs = (
         st.session_state.current_audit_runs
     )
 
-elif st.session_state.previous_audit_runs is not None:
+elif (
+    st.session_state.previous_audit_runs
+    is not None
+):
 
     displayed_runs = (
         st.session_state.previous_audit_runs
@@ -468,11 +558,6 @@ if displayed_runs:
         use_container_width=True,
     )
 
-
-    # ---------------------------------------------------------------
-    # Per-test results
-    # ---------------------------------------------------------------
-
     st.subheader("Per-Test Results")
 
     for audit_run in displayed_runs:
@@ -494,11 +579,13 @@ if displayed_runs:
             )
 
             st.write(
-                f"**{result.test_id}** — {status}"
+                f"**{result.test_id}** — "
+                f"{status}"
             )
 
             st.write(
-                f"Risk: {score.risk_rate:.2f}% | "
+                f"Risk: "
+                f"{score.risk_rate:.2f}% | "
                 f"Security: "
                 f"{score.security_score:.2f}% | "
                 f"Violations: "
@@ -593,7 +680,9 @@ if (
         col1.metric(
             "Fixed",
             len(
-                regression_result["fixed"]
+                regression_result[
+                    "fixed"
+                ]
             ),
         )
 
