@@ -6,6 +6,7 @@ from reporting.charts import score_comparison_chart, risk_comparison_chart
 from scoring.model_comparison import compare_models
 from scoring.risk_score import score_evaluation
 from storage.results_store import ResultsStore
+from datasets.jbb_loader import load_jbb_behaviors
 
 
 st.set_page_config(
@@ -15,6 +16,138 @@ st.set_page_config(
 
 st.title("GuardX — Security Audit Dashboard")
 st.caption("Constraint evaluation, risk scoring, model comparison and regression testing")
+
+st.subheader("JBB-Behaviors Test Selection")
+
+JBB_DATASET_PATH = "data/datasets/jbb_behaviors/harmful-behaviors.csv"
+
+jbb_test_cases = load_jbb_behaviors(
+    JBB_DATASET_PATH,
+    limit=None,
+    split="harmful",
+)
+
+categories = sorted(
+    {
+        test.constraints[0].metadata.get("category", "Unknown")
+        for test in jbb_test_cases
+    }
+)
+
+selected_category = st.selectbox(
+    "Filter prompts by category:",
+    options=["All"] + categories,
+)
+
+filtered_test_cases = jbb_test_cases
+
+if selected_category != "All":
+    filtered_test_cases = [
+        test
+        for test in jbb_test_cases
+        if test.constraints[0].metadata.get("category", "Unknown")
+        == selected_category
+    ]
+
+selected_test_ids = st.multiselect(
+    "Select one or more adversarial prompts to audit:",
+    options=[test.test_id for test in filtered_test_cases],
+)
+
+if selected_test_ids:
+    selected_test_cases = [
+        test
+        for test in filtered_test_cases
+        if test.test_id in selected_test_ids
+    ]
+
+    st.write(f"Selected prompts: {len(selected_test_cases)}")
+
+    for test in selected_test_cases:
+        st.write(f"**{test.test_id}:** {test.prompt}")
+else:
+    st.info("Select one or more prompts to begin an audit.")
+
+    st.subheader("Run Selected Audit")
+
+selected_models = st.multiselect(
+    "Select model(s) to test:",
+    options=[
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+    ],
+)
+
+if st.button("Audit Selected Prompts"):
+    if not selected_test_ids:
+        st.warning("Select at least one JBB prompt.")
+    elif not selected_models:
+        st.warning("Select at least one model.")
+    else:
+        from app.models.adapters.groq_adapter import GroqAdapter
+        from member2.runner.model_runner import run_model
+
+        audit_runs = []
+
+        for model_name in selected_models:
+            st.write(f"Running audit for **{model_name}**...")
+
+            model = GroqAdapter(model_name)
+
+            model_run = run_model(
+                model=model,
+                test_cases=selected_test_cases,
+            )
+
+            audit_runs.append(
+                {
+                    "model": model_run.model,
+                    "results": model_run.results,
+                    "run_id": f"interactive-{model_name.replace('/', '-')}",
+                    "average_latency_ms": model_run.average_latency_ms,
+                }
+            )
+
+        audit_summaries = compare_models(audit_runs)
+
+        st.success("Audit completed.")
+
+        st.subheader("Audit Results")
+
+        st.dataframe(
+            audit_summaries,
+            use_container_width=True,
+        )
+
+        st.subheader("Per-Test Results")
+
+        for audit_run in audit_runs:
+            st.write(f"### {audit_run['model']}")
+
+            for result in audit_run["results"]:
+                score = score_evaluation(result)
+
+                st.write(
+                    f"**{result.test_id}** — "
+                    f"{'PASS' if result.passed else 'FAIL'}"
+                )
+
+                st.write(
+                    f"Risk: {score.risk_rate:.2f}% | "
+                    f"Security: {score.security_score:.2f}% | "
+                    f"Violations: {score.violation_count}"
+                )
+
+                if result.violations:
+                    with st.expander(
+                        f"Violations — {result.test_id}"
+                    ):
+                        for violation in result.violations:
+                            st.write(
+                                f"- **{violation.constraint_id}** "
+                                f"({violation.risk_level}): "
+                                f"{violation.description}"
+                            )
 
 
 def make_result(
