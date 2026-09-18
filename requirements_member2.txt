@@ -2,3 +2,4 @@ pandas
 pytest
 streamlit
 plotly
+python-dotenv

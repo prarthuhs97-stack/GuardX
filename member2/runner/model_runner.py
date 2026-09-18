@@ -7,6 +7,10 @@ from app.models.base import LLMModel
 
 from runner.audit_runner import AuditTestCase
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 @dataclass
 class ModelRun:
