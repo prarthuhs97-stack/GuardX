@@ -1,38 +1,84 @@
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
 import streamlit as st
+
+# Make imports work when launched with:
+# streamlit run member2\dashboard.py
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MEMBER2_ROOT = PROJECT_ROOT / "member2"
+
+for path in (PROJECT_ROOT, MEMBER2_ROOT):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+from app.models.adapters.groq_adapter import GroqAdapter
+from datasets.jbb_loader import load_jbb_behaviors
+from regression.comparison import compare_runs
+from runner.model_runner import run_model
+from scoring.model_comparison import compare_models
+from scoring.risk_score import score_evaluation
+from storage.results_store import ResultsStore
+
+
+# -------------------------------------------------------------------
+# Session state
+# -------------------------------------------------------------------
+
 if "previous_audit_runs" not in st.session_state:
     st.session_state.previous_audit_runs = None
 
 if "current_audit_runs" not in st.session_state:
     st.session_state.current_audit_runs = None
 
-from app.evaluation.result import EvaluationResult, Violation
-from regression.comparison import compare_runs
-from reporting.charts import score_comparison_chart, risk_comparison_chart
-from scoring.model_comparison import compare_models
-from scoring.risk_score import score_evaluation
-from storage.results_store import ResultsStore
-from datasets.jbb_loader import load_jbb_behaviors
-from storage.results_store import ResultsStore
-from datetime import datetime, timezone
 
+# -------------------------------------------------------------------
+# Page configuration
+# -------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="GuardX — Security Audit Dashboard",
+    page_title="GuardX — LLM Security Audit",
+    page_icon="🛡️",
     layout="wide",
 )
 
-st.title("GuardX — Security Audit Dashboard")
-st.caption("Constraint evaluation, risk scoring, model comparison and regression testing")
+st.title("GuardX — LLM Security Audit")
+st.caption(
+    "Interactive adversarial testing, risk scoring, model comparison, "
+    "regression testing, and audit history."
+)
+
+
+# -------------------------------------------------------------------
+# Dataset
+# -------------------------------------------------------------------
+
+JBB_DATASET_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "datasets"
+    / "jbb_behaviors"
+    / "harmful-behaviors.csv"
+)
+
+try:
+    jbb_test_cases = load_jbb_behaviors(
+        JBB_DATASET_PATH,
+        limit=None,
+        split="harmful",
+    )
+except FileNotFoundError as exc:
+    st.error(str(exc))
+    st.stop()
+
+
+# -------------------------------------------------------------------
+# Prompt selection
+# -------------------------------------------------------------------
 
 st.subheader("JBB-Behaviors Test Selection")
-
-JBB_DATASET_PATH = "data/datasets/jbb_behaviors/harmful-behaviors.csv"
-
-jbb_test_cases = load_jbb_behaviors(
-    JBB_DATASET_PATH,
-    limit=None,
-    split="harmful",
-)
 
 categories = sorted(
     {
@@ -46,9 +92,9 @@ selected_category = st.selectbox(
     options=["All"] + categories,
 )
 
-filtered_test_cases = jbb_test_cases
-
-if selected_category != "All":
+if selected_category == "All":
+    filtered_test_cases = jbb_test_cases
+else:
     filtered_test_cases = [
         test
         for test in jbb_test_cases
@@ -61,21 +107,34 @@ selected_test_ids = st.multiselect(
     options=[test.test_id for test in filtered_test_cases],
 )
 
-if selected_test_ids:
-    selected_test_cases = [
-        test
-        for test in filtered_test_cases
-        if test.test_id in selected_test_ids
-    ]
+selected_test_cases = [
+    test
+    for test in filtered_test_cases
+    if test.test_id in selected_test_ids
+]
 
+if selected_test_cases:
     st.write(f"Selected prompts: {len(selected_test_cases)}")
 
     for test in selected_test_cases:
-        st.write(f"**{test.test_id}:** {test.prompt}")
+        category = test.constraints[0].metadata.get(
+            "category",
+            "Unknown",
+        )
+
+        st.write(
+            f"**{test.test_id}** — `{category}`"
+        )
+        st.caption(test.prompt)
 else:
     st.info("Select one or more prompts to begin an audit.")
 
-    st.subheader("Run Selected Audit")
+
+# -------------------------------------------------------------------
+# Model selection
+# -------------------------------------------------------------------
+
+st.subheader("Model Selection")
 
 selected_models = st.multiselect(
     "Select model(s) to test:",
@@ -85,20 +144,33 @@ selected_models = st.multiselect(
     ],
 )
 
-if st.button("Audit Selected Prompts"):
-    if not selected_test_ids:
+
+# -------------------------------------------------------------------
+# Audit execution
+# -------------------------------------------------------------------
+
+st.subheader("Run Selected Audit")
+
+if st.button(
+    "Audit Selected Prompts",
+    type="primary",
+):
+    if not selected_test_cases:
         st.warning("Select at least one JBB prompt.")
-    elif not selected_models:
+        st.stop()
+
+    if not selected_models:
         st.warning("Select at least one model.")
-    else:
-        from app.models.adapters.groq_adapter import GroqAdapter
-        from member2.runner.model_runner import run_model
+        st.stop()
 
-        audit_runs = []
+    audit_runs = []
 
-        for model_name in selected_models:
-            st.write(f"Running audit for **{model_name}**...")
+    for model_name in selected_models:
+        st.write(
+            f"Running audit for **{model_name}**..."
+        )
 
+        try:
             model = GroqAdapter(model_name)
 
             model_run = run_model(
@@ -106,82 +178,156 @@ if st.button("Audit Selected Prompts"):
                 test_cases=selected_test_cases,
             )
 
-            audit_runs.append(
-                {
-                    "model": model_run.model,
-                    "results": model_run.results,
-                    "run_id": f"interactive-{model_name.replace('/', '-')}",
-                    "average_latency_ms": model_run.average_latency_ms,
-                }
+        except Exception as exc:
+            st.error(
+                f"Audit failed for {model_name}: {exc}"
             )
+            continue
 
-        audit_summaries = compare_models(audit_runs)
+        # Unique run ID so repeated audits are preserved in SQLite.
+        timestamp = datetime.now(
+            timezone.utc
+        ).strftime("%Y%m%d%H%M%S%f")
 
-        if st.session_state.previous_audit_runs is None:
-           st.session_state.previous_audit_runs = audit_runs
-           st.session_state.current_audit_runs = None
-        else:
-           st.session_state.current_audit_runs = audit_runs
-
-        results_store = ResultsStore()
-
-        for audit_run in audit_runs:
-           summary = next(
-           item
-           for item in audit_summaries
-           if item["model"] == audit_run["model"]
-    )
-
-           results_store.save_evaluation_results(
-        run_id=audit_run["run_id"],
-        model=audit_run["model"],
-        created_at=datetime.now(timezone.utc).isoformat(),
-        results=audit_run["results"],
-        risk_rate=summary["risk_rate"],
-        security_score=summary["security_score"],
-    )
-
-        st.success("Audit completed.")
-
-        st.subheader("Audit Results")
-
-        st.dataframe(
-            audit_summaries,
-            use_container_width=True,
+        audit_runs.append(
+            {
+                "model": model_run.model,
+                "results": model_run.results,
+                "run_id": (
+                    f"interactive-"
+                    f"{model_name.replace('/', '-')}-"
+                    f"{timestamp}"
+                ),
+                "average_latency_ms": (
+                    model_run.average_latency_ms
+                ),
+            }
         )
 
-        st.subheader("Per-Test Results")
+    if not audit_runs:
+        st.error("No audit runs completed.")
+        st.stop()
 
-        for audit_run in audit_runs:
-            st.write(f"### {audit_run['model']}")
+    # Model-level summaries.
+    audit_summaries = compare_models(audit_runs)
 
-            for result in audit_run["results"]:
-                score = score_evaluation(result)
+    # ---------------------------------------------------------------
+    # Baseline/current regression state
+    # ---------------------------------------------------------------
 
-                st.write(
-                    f"**{result.test_id}** — "
-                    f"{'PASS' if result.passed else 'FAIL'}"
-                )
+    if st.session_state.previous_audit_runs is None:
+        st.session_state.previous_audit_runs = audit_runs
+        st.session_state.current_audit_runs = None
+        is_baseline_run = True
+    else:
+        st.session_state.current_audit_runs = audit_runs
+        is_baseline_run = False
 
-                st.write(
-                    f"Risk: {score.risk_rate:.2f}% | "
-                    f"Security: {score.security_score:.2f}% | "
-                    f"Violations: {score.violation_count}"
-                )
+    # ---------------------------------------------------------------
+    # Persist real audit results
+    # ---------------------------------------------------------------
 
-                if result.violations:
-                    with st.expander(
-                        f"Violations — {result.test_id}"
-                    ):
-                        for violation in result.violations:
-                            st.write(
-                                f"- **{violation.constraint_id}** "
-                                f"({violation.risk_level}): "
-                                f"{violation.description}"
-                            )
+    results_store = ResultsStore()
 
-        
-        st.subheader("Regression Testing")
+    for audit_run in audit_runs:
+        summary = next(
+            item
+            for item in audit_summaries
+            if item["model"] == audit_run["model"]
+        )
+
+        results_store.save_evaluation_results(
+            run_id=audit_run["run_id"],
+            model=audit_run["model"],
+            created_at=datetime.now(
+                timezone.utc
+            ).isoformat(),
+            results=audit_run["results"],
+            risk_rate=summary["risk_rate"],
+            security_score=summary["security_score"],
+        )
+
+    if is_baseline_run:
+        st.success(
+            "Audit completed and saved as the regression baseline."
+        )
+    else:
+        st.success(
+            "Audit completed and saved as the current regression run."
+        )
+
+
+# -------------------------------------------------------------------
+# Current audit results
+# -------------------------------------------------------------------
+
+if st.session_state.current_audit_runs is not None:
+    displayed_runs = st.session_state.current_audit_runs
+elif st.session_state.previous_audit_runs is not None:
+    displayed_runs = st.session_state.previous_audit_runs
+else:
+    displayed_runs = None
+
+
+if displayed_runs:
+    st.subheader("Audit Results")
+
+    displayed_summaries = compare_models(
+        displayed_runs
+    )
+
+    st.dataframe(
+        displayed_summaries,
+        use_container_width=True,
+    )
+
+    # ---------------------------------------------------------------
+    # Per-test results
+    # ---------------------------------------------------------------
+
+    st.subheader("Per-Test Results")
+
+    for audit_run in displayed_runs:
+        st.write(
+            f"### {audit_run['model']}"
+        )
+
+        for result in audit_run["results"]:
+            score = score_evaluation(result)
+
+            status = (
+                "PASS"
+                if result.passed
+                else "FAIL"
+            )
+
+            st.write(
+                f"**{result.test_id}** — {status}"
+            )
+
+            st.write(
+                f"Risk: {score.risk_rate:.2f}% | "
+                f"Security: {score.security_score:.2f}% | "
+                f"Violations: {score.violation_count}"
+            )
+
+            if result.violations:
+                with st.expander(
+                    f"Violations — {result.test_id}"
+                ):
+                    for violation in result.violations:
+                        st.write(
+                            f"- **{violation.constraint_id}** "
+                            f"({violation.risk_level}): "
+                            f"{violation.description}"
+                        )
+
+
+# -------------------------------------------------------------------
+# Regression testing
+# -------------------------------------------------------------------
+
+st.subheader("Regression Testing")
 
 if (
     st.session_state.previous_audit_runs
@@ -207,8 +353,13 @@ if (
             options=common_models,
         )
 
-        baseline_run = previous_models[regression_model]
-        current_run = current_models[regression_model]
+        baseline_run = previous_models[
+            regression_model
+        ]
+
+        current_run = current_models[
+            regression_model
+        ]
 
         regression_result = compare_runs(
             baseline_run["results"],
@@ -216,7 +367,8 @@ if (
         )
 
         st.write(
-            f"Compared tests: {regression_result['compared_count']}"
+            f"Compared tests: "
+            f"{regression_result['compared_count']}"
         )
 
         col1, col2, col3, col4 = st.columns(4)
@@ -233,7 +385,11 @@ if (
 
         col3.metric(
             "Persistent Failures",
-            len(regression_result["persistent_failures"]),
+            len(
+                regression_result[
+                    "persistent_failures"
+                ]
+            ),
         )
 
         col4.metric(
@@ -244,229 +400,75 @@ if (
         if regression_result["fixed"]:
             st.write(
                 "**Fixed:** "
-                + ", ".join(regression_result["fixed"])
+                + ", ".join(
+                    regression_result["fixed"]
+                )
             )
 
         if regression_result["new_failures"]:
             st.write(
                 "**New Failures:** "
-                + ", ".join(regression_result["new_failures"])
+                + ", ".join(
+                    regression_result["new_failures"]
+                )
             )
 
         if regression_result["persistent_failures"]:
             st.write(
                 "**Persistent Failures:** "
                 + ", ".join(
-                    regression_result["persistent_failures"]
+                    regression_result[
+                        "persistent_failures"
+                    ]
                 )
             )
 
         if regression_result["unchanged"]:
             st.write(
                 "**Unchanged:** "
-                + ", ".join(regression_result["unchanged"])
+                + ", ".join(
+                    regression_result["unchanged"]
+                )
             )
-    else:
-        st.info(
-            "No common models are available for regression comparison."
-        )
 
 else:
     st.info(
-        "Run an audit twice to compare the current run "
-        "against the previous baseline."
-    )
-
-def make_result(
-    test_id: str,
-    model: str,
-    passed: bool,
-    risk_level: str | None = None,
-) -> EvaluationResult:
-    violations = []
-
-    if risk_level:
-        violations.append(
-            Violation(
-                constraint_id="C1",
-                constraint_type="secret_protection",
-                risk_level=risk_level,
-                description="Synthetic secret protection violation",
-                expected="Synthetic secret must remain protected",
-                actual="Synthetic secret exposed",
-            )
-        )
-
-    return EvaluationResult(
-        test_id=test_id,
-        model=model,
-        response="Synthetic demonstration response",
-        passed=passed,
-        failed=[] if passed else ["C1"],
-        violations=violations,
+        "Run an audit twice with the same model and "
+        "prompt(s) to perform regression comparison."
     )
 
 
-model_a_results = [
-    make_result("T001", "model-a", True),
-    make_result("T002", "model-a", False, "high"),
-    make_result("T003", "model-a", True),
-]
+# -------------------------------------------------------------------
+# Audit history
+# -------------------------------------------------------------------
 
-model_b_results = [
-    make_result("T001", "model-b", True),
-    make_result("T002", "model-b", False, "critical"),
-    make_result("T003", "model-b", False, "medium"),
-]
+st.subheader("Audit History")
 
-runs = [
-    {
-        "run_id": "demo-model-a",
-        "model": "model-a",
-        "results": model_a_results,
-        "average_latency_ms": 120.0,
-    },
-    {
-        "run_id": "demo-model-b",
-        "model": "model-b",
-        "results": model_b_results,
-        "average_latency_ms": 145.0,
-    },
-]
+history_store = ResultsStore()
+stored_runs = history_store.list_runs()
 
+if stored_runs:
+    history_rows = []
 
-summaries = compare_models(runs)
-
-
-st.subheader("Model Comparison")
-
-st.dataframe(
-    summaries,
-    use_container_width=True,
-)
-
-
-left, right = st.columns(2)
-
-with left:
-    st.subheader("Security Score")
-    chart = score_comparison_chart(summaries)
-
-    if chart:
-        st.plotly_chart(chart, use_container_width=True)
-
-with right:
-    st.subheader("Risk Rate")
-    chart = risk_comparison_chart(summaries)
-
-    if chart:
-        st.plotly_chart(chart, use_container_width=True)
-
-
-st.subheader("Regression Testing")
-
-baseline_results = [
-    make_result("T001", "model-a", False, "high"),
-    make_result("T002", "model-a", True),
-    make_result("T003", "model-a", False, "medium"),
-]
-
-current_results = [
-    make_result("T001", "model-a", True),
-    make_result("T002", "model-a", True),
-    make_result("T003", "model-a", False, "critical"),
-]
-
-regression = compare_runs(
-    baseline_results,
-    current_results,
-)
-
-regression_columns = st.columns(4)
-
-regression_columns[0].metric(
-    "Fixed",
-    len(regression["fixed"]),
-)
-
-regression_columns[1].metric(
-    "New Failures",
-    len(regression["new_failures"]),
-)
-
-regression_columns[2].metric(
-    "Persistent Failures",
-    len(regression["persistent_failures"]),
-)
-
-regression_columns[3].metric(
-    "Unchanged",
-    len(regression["unchanged"]),
-)
-
-
-with st.expander("Regression Details"):
-    st.write("Fixed:", regression["fixed"])
-    st.write("New failures:", regression["new_failures"])
-    st.write("Persistent failures:", regression["persistent_failures"])
-    st.write("Unchanged:", regression["unchanged"])
-
-
-st.subheader("Example Evaluation Details")
-
-selected_result = model_a_results[1]
-selected_score = score_evaluation(selected_result)
-
-metric_columns = st.columns(4)
-
-metric_columns[0].metric(
-    "Risk Points",
-    selected_score.risk_points,
-)
-
-metric_columns[1].metric(
-    "Risk Rate",
-    f"{selected_score.risk_rate:.2f}%",
-)
-
-metric_columns[2].metric(
-    "Security Score",
-    f"{selected_score.security_score:.2f}%",
-)
-
-metric_columns[3].metric(
-    "Violations",
-    selected_score.violation_count,
-)
-
-
-st.subheader("Results Storage")
-
-store = ResultsStore()
-
-if st.button("Save Demo Runs"):
-    from datetime import datetime, timezone
-
-    timestamp = datetime.now(timezone.utc).isoformat()
-
-    for summary in summaries:
-        store.save_run(
+    for run in stored_runs:
+        history_rows.append(
             {
-                "run_id": summary["run_id"],
-                "model": summary["model"],
-                "created_at": timestamp,
-                "risk_rate": summary["risk_rate"],
-                "security_score": summary["security_score"],
-                "results": [],
+                "Run ID": run["run_id"],
+                "Model": run["model"],
+                "Created At": run["created_at"],
+                "Risk Rate": run.get("risk_rate"),
+                "Security Score": run.get(
+                    "security_score"
+                ),
+                "Tests": len(
+                    run.get("results", [])
+                ),
             }
         )
 
-    st.success("Demo runs saved to SQLite.")
-
-saved_runs = store.list_runs()
-
-if saved_runs:
     st.dataframe(
-        saved_runs,
+        history_rows,
         use_container_width=True,
     )
+else:
+    st.info("No stored audit runs yet.")
