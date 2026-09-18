@@ -3,9 +3,13 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app.evaluation.result import EvaluationResult
+
+from storage.serialization import evaluation_result_to_dict
+
 
 class ResultsStore:
-    """SQLite store for GuardX audit run summaries."""
+    """SQLite store for GuardX audit run summaries and evaluation results."""
 
     def __init__(self, database_path: str = "data/guardx_results.db"):
         self.database_path = Path(database_path)
@@ -31,7 +35,7 @@ class ResultsStore:
             )
 
     def save_run(self, run: dict[str, Any]) -> None:
-        """Save or replace one audit run."""
+        """Save a model-level audit summary."""
         with self._connect() as connection:
             connection.execute(
                 """
@@ -49,8 +53,32 @@ class ResultsStore:
                 ),
             )
 
+    def save_evaluation_results(
+        self,
+        run_id: str,
+        model: str,
+        created_at: str,
+        results: list[EvaluationResult],
+        risk_rate: float | None = None,
+        security_score: float | None = None,
+    ) -> None:
+        """Save actual EvaluationResult objects as a JSON-safe audit payload."""
+
+        payload = {
+            "run_id": run_id,
+            "model": model,
+            "created_at": created_at,
+            "risk_rate": risk_rate,
+            "security_score": security_score,
+            "results": [
+                evaluation_result_to_dict(result)
+                for result in results
+            ],
+        }
+
+        self.save_run(payload)
+
     def list_runs(self) -> list[dict[str, Any]]:
-        """Return saved runs ordered from newest to oldest."""
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -63,7 +91,6 @@ class ResultsStore:
         return [json.loads(row[0]) for row in rows]
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
-        """Return one saved run by ID."""
         with self._connect() as connection:
             row = connection.execute(
                 """
