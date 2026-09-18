@@ -5,6 +5,7 @@ from app.constraints.checkers.keyword_checker import (
     check_forbidden_keyword,
     check_required_keyword,
 )
+from app.constraints.semantic_checker import check_semantic
 from app.constraints.checkers.length_checker import (
     check_max_characters,
     check_max_lines,
@@ -67,6 +68,7 @@ class Evaluator:
             ConstraintType.MAX_LINES: check_max_lines,
             ConstraintType.BULLET_COUNT: check_bullet_count,
             ConstraintType.CODE_RESTRICTION: check_code_restriction,
+            ConstraintType.SEMANTIC: check_semantic,
         }
 
         checker = checkers.get(constraint.type)
