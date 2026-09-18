@@ -1,15 +1,28 @@
 from typing import Any
 
+from app.evaluation.result import EvaluationResult
 
-def index_results(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {item["test_id"]: item for item in results if "test_id" in item}
+
+def index_results(
+    results: list[EvaluationResult],
+) -> dict[str, EvaluationResult]:
+    """Index evaluation results by test ID."""
+    return {result.test_id: result for result in results}
 
 
 def compare_runs(
-    baseline_results: list[dict[str, Any]],
-    current_results: list[dict[str, Any]],
+    baseline_results: list[EvaluationResult],
+    current_results: list[EvaluationResult],
 ) -> dict[str, Any]:
-    """Compare two runs using the same test IDs."""
+    """
+    Compare baseline and current evaluation runs.
+
+    Categories:
+    - fixed: baseline failed, current passed
+    - new_failures: baseline passed, current failed
+    - persistent_failures: both failed
+    - unchanged: both passed
+    """
     baseline = index_results(baseline_results)
     current = index_results(current_results)
 
@@ -18,21 +31,17 @@ def compare_runs(
     persistent_failures = []
     unchanged = []
 
-    for test_id in sorted(set(baseline) | set(current)):
-        old = baseline.get(test_id)
-        new = current.get(test_id)
+    common_test_ids = sorted(set(baseline) & set(current))
 
-        if old is None or new is None:
-            continue
+    for test_id in common_test_ids:
+        old = baseline[test_id]
+        new = current[test_id]
 
-        old_passed = bool(old.get("passed", False))
-        new_passed = bool(new.get("passed", False))
-
-        if not old_passed and new_passed:
+        if not old.passed and new.passed:
             fixed.append(test_id)
-        elif old_passed and not new_passed:
+        elif old.passed and not new.passed:
             new_failures.append(test_id)
-        elif not old_passed and not new_passed:
+        elif not old.passed and not new.passed:
             persistent_failures.append(test_id)
         else:
             unchanged.append(test_id)
@@ -44,4 +53,5 @@ def compare_runs(
         "unchanged": unchanged,
         "baseline_count": len(baseline_results),
         "current_count": len(current_results),
+        "compared_count": len(common_test_ids),
     }
