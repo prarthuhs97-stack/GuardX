@@ -31,3 +31,21 @@ class Constraint:
     risk_level: RiskLevel = RiskLevel.MEDIUM
     description: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_semantic(
+        cls,
+        constraint_id: str,
+        description: str,
+        risk_level: RiskLevel = RiskLevel.MEDIUM,
+        metadata: dict[str, Any] | None = None,
+    ) -> "Constraint":
+        """Create a semantic constraint dynamically at runtime."""
+        return cls(
+            constraint_id=constraint_id,
+            type=ConstraintType.SEMANTIC,
+            value=description,
+            risk_level=risk_level,
+            description=description,
+            metadata=metadata or {},
+        )
