@@ -1,3 +1,4 @@
+
 import sys
 import time
 from datetime import datetime, timezone
@@ -15,7 +16,6 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MEMBER2_ROOT = PROJECT_ROOT / "member2"
 
-# Load the project's .env explicitly.
 ENV_FILE = PROJECT_ROOT / ".env"
 load_dotenv(dotenv_path=ENV_FILE)
 
@@ -29,6 +29,7 @@ for path in (PROJECT_ROOT, MEMBER2_ROOT):
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
+
 # -------------------------------------------------------------------
 # Project imports
 # -------------------------------------------------------------------
@@ -36,6 +37,7 @@ for path in (PROJECT_ROOT, MEMBER2_ROOT):
 from app.models.adapters.groq_adapter import GroqAdapter
 from datasets.jbb_loader import load_jbb_behaviors
 from regression.comparison import compare_runs
+from runner.audit_runner import AuditTestCase
 from runner.model_runner import run_model
 from scoring.model_comparison import compare_models
 from scoring.risk_score import score_evaluation
@@ -56,7 +58,7 @@ st.title("GuardX — LLM Security Audit")
 
 st.caption(
     "Adversarial LLM testing with risk scoring, model comparison, "
-    "regression testing, and persistent audit history."
+    "regression testing, custom prompts, and persistent audit history."
 )
 
 
@@ -69,6 +71,15 @@ if "previous_audit_runs" not in st.session_state:
 
 if "current_audit_runs" not in st.session_state:
     st.session_state.current_audit_runs = None
+
+if "current_response_records" not in st.session_state:
+    st.session_state.current_response_records = {}
+
+if "previous_response_records" not in st.session_state:
+    st.session_state.previous_response_records = {}
+
+if "audit_source" not in st.session_state:
+    st.session_state.audit_source = None
 
 
 # -------------------------------------------------------------------
@@ -106,6 +117,7 @@ audit_mode = st.radio(
         "Single Prompt",
         "Category Batch",
         "Full Dataset",
+        "Custom Prompt",
     ],
     horizontal=True,
 )
@@ -116,6 +128,10 @@ audit_mode = st.radio(
 # -------------------------------------------------------------------
 
 selected_test_cases = []
+custom_prompt = ""
+custom_constraint_description = ""
+custom_constraint_template = None
+is_custom_audit = audit_mode == "Custom Prompt"
 
 
 if audit_mode == "Single Prompt":
@@ -140,11 +156,8 @@ if audit_mode == "Single Prompt":
     )
 
     if selected_category == "All":
-
         filtered_test_cases = jbb_test_cases
-
     else:
-
         filtered_test_cases = [
             test
             for test in jbb_test_cases
@@ -209,9 +222,7 @@ elif audit_mode == "Category Batch":
         value=min(5, len(category_cases)),
     )
 
-    selected_test_cases = category_cases[
-        :batch_size
-    ]
+    selected_test_cases = category_cases[:batch_size]
 
     st.write(
         f"Selected {len(selected_test_cases)} "
@@ -219,7 +230,7 @@ elif audit_mode == "Category Batch":
     )
 
 
-else:
+elif audit_mode == "Full Dataset":
 
     st.write(
         "Run the JBB harmful-behaviors dataset."
@@ -236,9 +247,7 @@ else:
         ),
     )
 
-    selected_test_cases = jbb_test_cases[
-        :batch_size
-    ]
+    selected_test_cases = jbb_test_cases[:batch_size]
 
     st.write(
         f"Selected {len(selected_test_cases)} "
@@ -246,15 +255,90 @@ else:
     )
 
 
+else:
+    # ---------------------------------------------------------------
+    # Custom Prompt
+    # ---------------------------------------------------------------
+
+    st.write(
+        "Test your own prompt against a selected model "
+        "using GuardX's existing evaluation and risk-scoring pipeline."
+    )
+
+    custom_prompt = st.text_area(
+        "Enter your prompt:",
+        height=180,
+        placeholder=(
+            "Example: Explain how you would handle a request "
+            "that asks you to reveal a protected synthetic secret."
+        ),
+    )
+
+    st.write("### Constraint")
+
+    custom_constraint_description = st.text_area(
+        "What should the model be required to follow?",
+        height=120,
+        placeholder=(
+            "Example: Do not reveal protected or secret information."
+        ),
+        help=(
+            "This describes the semantic constraint that GuardX "
+            "will evaluate against the model response."
+        ),
+    )
+
+    st.info(
+        "Custom Prompt uses an existing GuardX JBB constraint "
+        "as the evaluation template. The prompt itself is replaced "
+        "with your custom prompt."
+    )
+
+    template_options = [
+        (
+            f"{test.test_id} — "
+            f"{test.constraints[0].metadata.get('category', 'Unknown')}"
+        )
+        for test in jbb_test_cases
+    ]
+
+    selected_template_label = st.selectbox(
+        "Select evaluation template:",
+        options=template_options,
+        help=(
+            "Choose an existing GuardX constraint whose risk/evaluation "
+            "configuration should be reused for this custom test."
+        ),
+    )
+
+    template_index = template_options.index(
+        selected_template_label
+    )
+
+    custom_constraint_template = jbb_test_cases[
+        template_index
+    ]
+
+    if custom_constraint_description.strip():
+        st.caption(
+            "The custom constraint description is shown for clarity. "
+            "The existing GuardX evaluator constraint configuration "
+            "remains the evaluation source for this version."
+        )
+
+    if custom_prompt.strip():
+        st.subheader("Custom Prompt Preview")
+        st.code(custom_prompt.strip(), language="text")
+
+
 # -------------------------------------------------------------------
 # Selected prompt preview
 # -------------------------------------------------------------------
 
-if selected_test_cases:
+if selected_test_cases and not is_custom_audit:
 
     with st.expander(
-        f"View selected prompts "
-        f"({len(selected_test_cases)})"
+        f"View selected prompts ({len(selected_test_cases)})"
     ):
 
         for test in selected_test_cases:
@@ -275,7 +359,7 @@ if selected_test_cases:
 
             st.caption(test.prompt)
 
-else:
+elif not is_custom_audit and not selected_test_cases:
 
     st.warning(
         "No prompts are currently selected."
@@ -308,19 +392,67 @@ if st.button(
     type="primary",
 ):
 
-    if not selected_test_cases:
+    # ---------------------------------------------------------------
+    # Validation
+    # ---------------------------------------------------------------
+
+    if not selected_models:
+        st.warning(
+            "Select at least one model."
+        )
+        st.stop()
+
+    if is_custom_audit:
+
+        if not custom_prompt.strip():
+            st.warning(
+                "Enter a custom prompt before starting the audit."
+            )
+            st.stop()
+
+        if not custom_constraint_description.strip():
+            st.warning(
+                "Enter a constraint before starting the audit."
+            )
+            st.stop()
+
+        if custom_constraint_template is None:
+            st.warning(
+                "Select an evaluation template."
+            )
+            st.stop()
+
+        # -----------------------------------------------------------
+        # Build custom test case
+        #
+        # We reuse the existing GuardX constraint object so that
+        # Member 1's evaluation engine remains untouched.
+        # -----------------------------------------------------------
+
+        template_constraint = (
+            custom_constraint_template.constraints[0]
+        )
+
+        custom_test_case = AuditTestCase(
+            test_id="custom-user-prompt",
+            prompt=custom_prompt.strip(),
+            constraints=[template_constraint],
+        )
+
+        selected_test_cases = [custom_test_case]
+
+    elif not selected_test_cases:
 
         st.warning(
             "Select at least one prompt."
         )
         st.stop()
 
-    if not selected_models:
+    # ---------------------------------------------------------------
+    # Reset response records for this audit
+    # ---------------------------------------------------------------
 
-        st.warning(
-            "Select at least one model."
-        )
-        st.stop()
+    response_records = {}
 
     audit_runs = []
 
@@ -329,9 +461,7 @@ if st.button(
         text="Preparing audit...",
     )
 
-    total_models = len(
-        selected_models
-    )
+    total_models = len(selected_models)
 
     for model_index, model_name in enumerate(
         selected_models,
@@ -344,9 +474,7 @@ if st.button(
 
         model_progress = st.progress(
             0,
-            text=(
-                f"Starting {model_name}..."
-            ),
+            text=f"Starting {model_name}...",
         )
 
         status_placeholder = st.empty()
@@ -384,10 +512,114 @@ if st.button(
                 model_name
             )
 
-            model_run = run_model(
-                model=model,
-                test_cases=selected_test_cases,
-                progress_callback=update_progress,
+            # -------------------------------------------------------
+            # Custom prompt:
+            #
+            # We execute directly once so the dashboard can retain
+            # and display the actual model response.
+            #
+            # Existing JBB audits continue to use run_model().
+            # -------------------------------------------------------
+
+            if is_custom_audit:
+
+                start = time.perf_counter()
+
+                response = model.generate(
+                    custom_test_case.prompt
+                )
+
+                elapsed_ms = (
+                    time.perf_counter() - start
+                ) * 1000
+
+                from app.evaluation.evaluator import Evaluator
+
+                evaluator = Evaluator()
+
+                result = evaluator.evaluate(
+                    test_id=custom_test_case.test_id,
+                    model=model.name,
+                    response=response,
+                    constraints=custom_test_case.constraints,
+                )
+
+                model_run_results = [result]
+
+                response_records[
+                    model_name
+                ] = {
+                    custom_test_case.test_id: {
+                        "response": response,
+                        "latency_ms": elapsed_ms,
+                        "prompt": custom_test_case.prompt,
+                        "constraint": (
+                            custom_constraint_description.strip()
+                        ),
+                    }
+                }
+
+                model_average_latency = round(
+                    elapsed_ms,
+                    2,
+                )
+
+                model_progress.progress(
+                    1.0,
+                    text=(
+                        f"{model_name}: "
+                        "completed custom prompt"
+                    ),
+                )
+
+                status_placeholder.caption(
+                    f"Custom prompt completed "
+                    f"| Model latency: "
+                    f"{elapsed_ms:.2f} ms"
+                )
+
+            else:
+
+                model_run = run_model(
+                    model=model,
+                    test_cases=selected_test_cases,
+                    progress_callback=update_progress,
+                )
+
+                model_run_results = model_run.results
+                model_average_latency = (
+                    model_run.average_latency_ms
+                )
+
+            # -------------------------------------------------------
+            # Audit run metadata
+            # -------------------------------------------------------
+
+            timestamp = datetime.now(
+                timezone.utc
+            ).strftime(
+                "%Y%m%d%H%M%S%f"
+            )
+
+            run_prefix = (
+                "custom"
+                if is_custom_audit
+                else "interactive"
+            )
+
+            audit_runs.append(
+                {
+                    "model": model_name,
+                    "results": model_run_results,
+                    "run_id": (
+                        f"{run_prefix}-"
+                        f"{model_name.replace('/', '-')}-"
+                        f"{timestamp}"
+                    ),
+                    "average_latency_ms": (
+                        model_average_latency
+                    ),
+                }
             )
 
         except Exception as exc:
@@ -398,36 +630,6 @@ if st.button(
             )
 
             continue
-
-        model_progress.progress(
-            1.0,
-            text=(
-                f"{model_name}: "
-                f"completed all "
-                f"{len(selected_test_cases)} tests"
-            ),
-        )
-
-        timestamp = datetime.now(
-            timezone.utc
-        ).strftime(
-            "%Y%m%d%H%M%S%f"
-        )
-
-        audit_runs.append(
-            {
-                "model": model_run.model,
-                "results": model_run.results,
-                "run_id": (
-                    "interactive-"
-                    f"{model_name.replace('/', '-')}-"
-                    f"{timestamp}"
-                ),
-                "average_latency_ms": (
-                    model_run.average_latency_ms
-                ),
-            }
-        )
 
         overall_percentage = (
             model_index / total_models
@@ -449,12 +651,28 @@ if st.button(
         st.stop()
 
     # ---------------------------------------------------------------
+    # Save response records
+    # ---------------------------------------------------------------
+
+    if is_custom_audit:
+
+        st.session_state.current_response_records = (
+            response_records
+        )
+
+    else:
+
+        st.session_state.current_response_records = {}
+
+
+    # ---------------------------------------------------------------
     # Model summaries
     # ---------------------------------------------------------------
 
     audit_summaries = compare_models(
         audit_runs
     )
+
 
     # ---------------------------------------------------------------
     # Regression state
@@ -469,9 +687,11 @@ if st.button(
             audit_runs
         )
 
-        st.session_state.current_audit_runs = (
-            None
+        st.session_state.previous_response_records = (
+            response_records
         )
+
+        st.session_state.current_audit_runs = None
 
         is_baseline_run = True
 
@@ -482,6 +702,7 @@ if st.button(
         )
 
         is_baseline_run = False
+
 
     # ---------------------------------------------------------------
     # Persistent storage
@@ -511,6 +732,11 @@ if st.button(
             ],
         )
 
+
+    # ---------------------------------------------------------------
+    # Completion message
+    # ---------------------------------------------------------------
+
     if is_baseline_run:
 
         st.success(
@@ -539,6 +765,10 @@ if (
         st.session_state.current_audit_runs
     )
 
+    displayed_response_records = (
+        st.session_state.current_response_records
+    )
+
 elif (
     st.session_state.previous_audit_runs
     is not None
@@ -548,9 +778,14 @@ elif (
         st.session_state.previous_audit_runs
     )
 
+    displayed_response_records = (
+        st.session_state.previous_response_records
+    )
+
 else:
 
     displayed_runs = None
+    displayed_response_records = {}
 
 
 # -------------------------------------------------------------------
@@ -574,8 +809,10 @@ if displayed_runs:
 
     for audit_run in displayed_runs:
 
+        model_name = audit_run["model"]
+
         st.write(
-            f"### {audit_run['model']}"
+            f"### {model_name}"
         )
 
         for result in audit_run["results"]:
@@ -603,6 +840,68 @@ if displayed_runs:
                 f"Violations: "
                 f"{score.violation_count}"
             )
+
+            # -------------------------------------------------------
+            # Custom model response
+            # -------------------------------------------------------
+
+            model_records = (
+                displayed_response_records.get(
+                    model_name,
+                    {},
+                )
+            )
+
+            response_record = (
+                model_records.get(
+                    result.test_id
+                )
+            )
+
+            if response_record:
+
+                with st.expander(
+                    f"View model response — "
+                    f"{result.test_id}",
+                    expanded=True,
+                ):
+
+                    st.write("**Prompt**")
+
+                    st.code(
+                        response_record["prompt"],
+                        language="text",
+                    )
+
+                    st.write(
+                        "**Model response**"
+                    )
+
+                    st.code(
+                        response_record["response"],
+                        language="text",
+                    )
+
+                    st.caption(
+                        f"Model latency: "
+                        f"{response_record['latency_ms']:.2f} ms"
+                    )
+
+                    if response_record.get(
+                        "constraint"
+                    ):
+
+                        st.write(
+                            "**User-specified constraint**"
+                        )
+
+                        st.info(
+                            response_record["constraint"]
+                        )
+
+            # -------------------------------------------------------
+            # Violations
+            # -------------------------------------------------------
 
             if result.violations:
 
@@ -736,9 +1035,7 @@ if (
                 )
             )
 
-        if regression_result[
-            "new_failures"
-        ]:
+        if regression_result["new_failures"]:
 
             st.write(
                 "**New Failures:** "
@@ -749,9 +1046,7 @@ if (
                 )
             )
 
-        if regression_result[
-            "persistent_failures"
-        ]:
+        if regression_result["persistent_failures"]:
 
             st.write(
                 "**Persistent Failures:** "
@@ -762,9 +1057,7 @@ if (
                 )
             )
 
-        if regression_result[
-            "unchanged"
-        ]:
+        if regression_result["unchanged"]:
 
             st.write(
                 "**Unchanged:** "
@@ -792,9 +1085,7 @@ st.subheader("Audit History")
 
 history_store = ResultsStore()
 
-stored_runs = (
-    history_store.list_runs()
-)
+stored_runs = history_store.list_runs()
 
 if stored_runs:
 
@@ -806,9 +1097,7 @@ if stored_runs:
             {
                 "Run ID": run["run_id"],
                 "Model": run["model"],
-                "Created At": run[
-                    "created_at"
-                ],
+                "Created At": run["created_at"],
                 "Risk Rate": run.get(
                     "risk_rate"
                 ),
