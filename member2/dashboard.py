@@ -2,15 +2,27 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+import os
 
 import streamlit as st
+from dotenv import load_dotenv
+
 
 # -------------------------------------------------------------------
-# Project import paths
+# Project paths
 # -------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MEMBER2_ROOT = PROJECT_ROOT / "member2"
+
+# Load the project's .env explicitly.
+ENV_FILE = PROJECT_ROOT / ".env"
+load_dotenv(dotenv_path=ENV_FILE)
+
+
+# -------------------------------------------------------------------
+# Project import paths
+# -------------------------------------------------------------------
 
 for path in (PROJECT_ROOT, MEMBER2_ROOT):
     path_str = str(path)
