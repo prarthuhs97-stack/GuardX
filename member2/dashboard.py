@@ -7,6 +7,7 @@ import os
 
 import streamlit as st
 from dotenv import load_dotenv
+from app.constraints.constraint import Constraint, RiskLevel
 
 
 # -------------------------------------------------------------------
@@ -130,7 +131,7 @@ audit_mode = st.radio(
 selected_test_cases = []
 custom_prompt = ""
 custom_constraint_description = ""
-custom_constraint_template = None
+
 is_custom_audit = audit_mode == "Custom Prompt"
 
 
@@ -289,42 +290,12 @@ else:
     )
 
     st.info(
-        "Custom Prompt uses an existing GuardX JBB constraint "
-        "as the evaluation template. The prompt itself is replaced "
-        "with your custom prompt."
-    )
+    "GuardX will convert your constraint into a runtime semantic "
+    "constraint and evaluate the model response using the existing "
+    "GuardX Evaluator and risk-scoring pipeline."
+)
 
-    template_options = [
-        (
-            f"{test.test_id} — "
-            f"{test.constraints[0].metadata.get('category', 'Unknown')}"
-        )
-        for test in jbb_test_cases
-    ]
-
-    selected_template_label = st.selectbox(
-        "Select evaluation template:",
-        options=template_options,
-        help=(
-            "Choose an existing GuardX constraint whose risk/evaluation "
-            "configuration should be reused for this custom test."
-        ),
-    )
-
-    template_index = template_options.index(
-        selected_template_label
-    )
-
-    custom_constraint_template = jbb_test_cases[
-        template_index
-    ]
-
-    if custom_constraint_description.strip():
-        st.caption(
-            "The custom constraint description is shown for clarity. "
-            "The existing GuardX evaluator constraint configuration "
-            "remains the evaluation source for this version."
-        )
+    
 
     if custom_prompt.strip():
         st.subheader("Custom Prompt Preview")
@@ -392,17 +363,12 @@ if st.button(
     type="primary",
 ):
 
-    # ---------------------------------------------------------------
-    # Validation
-    # ---------------------------------------------------------------
+    if st.button(
+    "Start Audit",
+    type="primary",
+):
 
-    if not selected_models:
-        st.warning(
-            "Select at least one model."
-        )
-        st.stop()
-
-    if is_custom_audit:
+     if is_custom_audit:
 
         if not custom_prompt.strip():
             st.warning(
@@ -416,27 +382,22 @@ if st.button(
             )
             st.stop()
 
-        if custom_constraint_template is None:
-            st.warning(
-                "Select an evaluation template."
-            )
-            st.stop()
-
-        # -----------------------------------------------------------
-        # Build custom test case
-        #
-        # We reuse the existing GuardX constraint object so that
-        # Member 1's evaluation engine remains untouched.
-        # -----------------------------------------------------------
-
-        template_constraint = (
-            custom_constraint_template.constraints[0]
+        # Build a real runtime semantic constraint from
+        # the user-provided constraint description.
+        custom_constraint = Constraint.from_semantic(
+            constraint_id="CUSTOM-SEMANTIC",
+            description=custom_constraint_description.strip(),
+            risk_level=RiskLevel.HIGH,
+            metadata={
+                "source": "custom_prompt",
+                "category": "user_defined",
+            },
         )
 
         custom_test_case = AuditTestCase(
             test_id="custom-user-prompt",
             prompt=custom_prompt.strip(),
-            constraints=[template_constraint],
+            constraints=[custom_constraint],
         )
 
         selected_test_cases = [custom_test_case]
