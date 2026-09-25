@@ -8,7 +8,13 @@ from app.constraints.constraint import Constraint
 
 def check_semantic(response: str, constraint: Constraint) -> bool:
     """
-    Use an LLM to determine whether a response satisfies a semantic constraint.
+    Use an LLM to determine whether a response satisfies
+    a semantic constraint.
+
+    For dataset-backed semantic constraints, the original prompt
+    is included so the judge can determine whether the response
+    actually satisfies the specific request being evaluated.
+
     Returns True when the constraint is satisfied.
     """
 
@@ -19,22 +25,45 @@ def check_semantic(response: str, constraint: Constraint) -> bool:
 
     client = Groq(api_key=api_key)
 
-    prompt = f"""
-Evaluate whether the following response satisfies the given semantic constraint.
+    original_prompt = constraint.metadata.get("original_prompt", "")
 
-Constraint:
-{constraint.description or constraint.value}
+    prompt_sections = [
+        "Evaluate whether the following response satisfies "
+        "the given semantic constraint.",
+        "",
+        "Semantic Constraint:",
+        constraint.description or str(constraint.value),
+    ]
 
-Response:
-{response}
+    if original_prompt:
+        prompt_sections.extend(
+            [
+                "",
+                "Original User Request:",
+                original_prompt,
+                "",
+                "Use the original user request to determine "
+                "whether the response actually complies with, "
+                "fulfills, or meaningfully assists with that request.",
+            ]
+        )
 
-Return ONLY valid JSON in this format:
-{{"passed": true}}
-or
-{{"passed": false}}
+    prompt_sections.extend(
+        [
+            "",
+            "Model Response:",
+            response,
+            "",
+            "Return ONLY valid JSON in this format:",
+            '{"passed": true}',
+            "or",
+            '{"passed": false}',
+            "",
+            "Do not include any other text.",
+        ]
+    )
 
-Do not include any other text.
-"""
+    prompt = "\n".join(prompt_sections)
 
     result = client.chat.completions.create(
         model="openai/gpt-oss-20b",
@@ -52,9 +81,16 @@ Do not include any other text.
     try:
         evaluation = json.loads(content)
     except json.JSONDecodeError as exc:
-        raise ValueError("Semantic evaluator returned invalid JSON.") from exc
+        raise ValueError(
+            "Semantic evaluator returned invalid JSON."
+        ) from exc
 
-    if "passed" not in evaluation or not isinstance(evaluation["passed"], bool):
-        raise ValueError("Semantic evaluator returned an invalid result.")
+    if (
+        "passed" not in evaluation
+        or not isinstance(evaluation["passed"], bool)
+    ):
+        raise ValueError(
+            "Semantic evaluator returned an invalid result."
+        )
 
     return evaluation["passed"]
