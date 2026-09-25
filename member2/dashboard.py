@@ -361,14 +361,10 @@ st.subheader("Run Audit")
 if st.button(
     "Start Audit",
     type="primary",
+    key="start_audit_button",
 ):
 
-    if st.button(
-    "Start Audit",
-    type="primary",
-):
-
-     if is_custom_audit:
+    if is_custom_audit:
 
         if not custom_prompt.strip():
             st.warning(
