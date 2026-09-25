@@ -632,33 +632,25 @@ if st.button(
 
 
     # ---------------------------------------------------------------
-    # Regression state
-    # ---------------------------------------------------------------
+# Regression state
+# ---------------------------------------------------------------
 
-    if (
-        st.session_state.previous_audit_runs
-        is None
-    ):
+if st.session_state.previous_audit_runs is None:
 
-        st.session_state.previous_audit_runs = (
-            audit_runs
-        )
+    # First audit becomes the baseline.
+    st.session_state.previous_audit_runs = audit_runs
+    st.session_state.previous_response_records = response_records
+    st.session_state.current_audit_runs = None
 
-        st.session_state.previous_response_records = (
-            response_records
-        )
+    is_baseline_run = True
 
-        st.session_state.current_audit_runs = None
+else:
 
-        is_baseline_run = True
+    # Every later audit is compared against the
+    # immediately previous audit.
+    st.session_state.current_audit_runs = audit_runs
 
-    else:
-
-        st.session_state.current_audit_runs = (
-            audit_runs
-        )
-
-        is_baseline_run = False
+    is_baseline_run = False
 
 
     # ---------------------------------------------------------------
@@ -881,30 +873,24 @@ if displayed_runs:
 
 
 # -------------------------------------------------------------------
-# Regression testing
+# Regression Testing
 # -------------------------------------------------------------------
 
 st.subheader("Regression Testing")
 
 if (
-    st.session_state.previous_audit_runs
-    and st.session_state.current_audit_runs
+    st.session_state.previous_audit_runs is not None
+    and st.session_state.current_audit_runs is not None
 ):
 
     previous_models = {
         run["model"]: run
-        for run in (
-            st.session_state
-            .previous_audit_runs
-        )
+        for run in st.session_state.previous_audit_runs
     }
 
     current_models = {
         run["model"]: run
-        for run in (
-            st.session_state
-            .current_audit_runs
-        )
+        for run in st.session_state.current_audit_runs
     }
 
     common_models = sorted(
@@ -919,17 +905,9 @@ if (
             options=common_models,
         )
 
-        baseline_run = (
-            previous_models[
-                regression_model
-            ]
-        )
+        baseline_run = previous_models[regression_model]
 
-        current_run = (
-            current_models[
-                regression_model
-            ]
-        )
+        current_run = current_models[regression_model]
 
         regression_result = compare_runs(
             baseline_run["results"],
@@ -941,44 +919,26 @@ if (
             f"{regression_result['compared_count']}"
         )
 
-        col1, col2, col3, col4 = (
-            st.columns(4)
-        )
+        col1, col2, col3, col4 = st.columns(4)
 
         col1.metric(
             "Fixed",
-            len(
-                regression_result[
-                    "fixed"
-                ]
-            ),
+            len(regression_result["fixed"]),
         )
 
         col2.metric(
             "New Failures",
-            len(
-                regression_result[
-                    "new_failures"
-                ]
-            ),
+            len(regression_result["new_failures"]),
         )
 
         col3.metric(
             "Persistent Failures",
-            len(
-                regression_result[
-                    "persistent_failures"
-                ]
-            ),
+            len(regression_result["persistent_failures"]),
         )
 
         col4.metric(
             "Unchanged",
-            len(
-                regression_result[
-                    "unchanged"
-                ]
-            ),
+            len(regression_result["unchanged"]),
         )
 
         if regression_result["fixed"]:
@@ -986,9 +946,7 @@ if (
             st.write(
                 "**Fixed:** "
                 + ", ".join(
-                    regression_result[
-                        "fixed"
-                    ]
+                    regression_result["fixed"]
                 )
             )
 
@@ -997,9 +955,7 @@ if (
             st.write(
                 "**New Failures:** "
                 + ", ".join(
-                    regression_result[
-                        "new_failures"
-                    ]
+                    regression_result["new_failures"]
                 )
             )
 
@@ -1008,9 +964,7 @@ if (
             st.write(
                 "**Persistent Failures:** "
                 + ", ".join(
-                    regression_result[
-                        "persistent_failures"
-                    ]
+                    regression_result["persistent_failures"]
                 )
             )
 
@@ -1019,11 +973,37 @@ if (
             st.write(
                 "**Unchanged:** "
                 + ", ".join(
-                    regression_result[
-                        "unchanged"
-                    ]
+                    regression_result["unchanged"]
                 )
             )
+
+        # -----------------------------------------------------------
+        # Advance regression state
+        #
+        # The current run becomes the baseline for the next run.
+        # This makes regression testing compare consecutive audits:
+        #
+        # Run 1 -> Run 2
+        # Run 2 -> Run 3
+        # Run 3 -> Run 4
+        # -----------------------------------------------------------
+
+        st.session_state.previous_audit_runs = (
+            st.session_state.current_audit_runs
+        )
+
+        st.session_state.previous_response_records = (
+            st.session_state.current_response_records
+        )
+
+        st.session_state.current_audit_runs = None
+
+    else:
+
+        st.info(
+            "No common models are available for "
+            "regression comparison."
+        )
 
 else:
 
