@@ -1,15 +1,8 @@
-
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 import os
-
-import streamlit as st
-from dotenv import load_dotenv
-from app.constraints.constraint import Constraint, RiskLevel
-from app.models.adapters.groq_adapter import GroqAdapter
-from app.models.adapters.ollama_adapter import OllamaAdapter
 
 # -------------------------------------------------------------------
 # Project paths
@@ -17,10 +10,6 @@ from app.models.adapters.ollama_adapter import OllamaAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MEMBER2_ROOT = PROJECT_ROOT / "member2"
-
-ENV_FILE = PROJECT_ROOT / ".env"
-load_dotenv(dotenv_path=ENV_FILE)
-
 
 # -------------------------------------------------------------------
 # Project import paths
@@ -31,12 +20,30 @@ for path in (PROJECT_ROOT, MEMBER2_ROOT):
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
+# -------------------------------------------------------------------
+# Environment
+# -------------------------------------------------------------------
+
+ENV_FILE = PROJECT_ROOT / ".env"
+
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=ENV_FILE)
+
+# -------------------------------------------------------------------
+# Third-party imports
+# -------------------------------------------------------------------
+
+import streamlit as st
 
 # -------------------------------------------------------------------
 # Project imports
 # -------------------------------------------------------------------
 
+from app.constraints.constraint import Constraint, RiskLevel
 from app.models.adapters.groq_adapter import GroqAdapter
+from app.models.adapters.ollama_adapter import OllamaAdapter
+
 from datasets.jbb_loader import load_jbb_behaviors
 from regression.comparison import compare_runs
 from runner.audit_runner import AuditTestCase
