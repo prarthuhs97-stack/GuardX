@@ -8,7 +8,8 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 from app.constraints.constraint import Constraint, RiskLevel
-
+from app.models.adapters.groq_adapter import GroqAdapter
+from app.models.adapters.ollama_adapter import OllamaAdapter
 
 # -------------------------------------------------------------------
 # Project paths
@@ -348,7 +349,13 @@ selected_models = st.multiselect(
     options=[
         "openai/gpt-oss-20b",
         "openai/gpt-oss-120b",
+        "qwen2.5:0.5b",
+        "gemma3:1b",
     ],
+    help=(
+        "Groq models run through the Groq API. "
+        "Qwen and Gemma run locally through Ollama."
+    ),
 )
 
 
@@ -465,9 +472,10 @@ if st.button(
 
         try:
 
-            model = GroqAdapter(
-                model_name
-            )
+            if model_name.startswith("openai/"):
+              model = GroqAdapter(model_name)
+            else:
+              model = OllamaAdapter(model_name)
 
             # -------------------------------------------------------
             # Custom prompt:
@@ -631,31 +639,58 @@ if st.button(
     )
 
 
-    # ---------------------------------------------------------------
+# ---------------------------------------------------------------
 # Regression state
 # ---------------------------------------------------------------
 
-if st.session_state.previous_audit_runs is None:
+if "audit_runs" in locals() and audit_runs:
 
-    # First audit becomes the baseline.
-    st.session_state.previous_audit_runs = audit_runs
-    st.session_state.previous_response_records = response_records
-    st.session_state.current_audit_runs = None
+    if st.session_state.previous_audit_runs is None:
 
-    is_baseline_run = True
+        # First completed audit becomes the baseline.
+        st.session_state.previous_audit_runs = audit_runs
+        st.session_state.previous_response_records = (
+            response_records
+        )
+
+        st.session_state.current_audit_runs = None
+        st.session_state.current_response_records = {}
+
+        is_baseline_run = True
+
+    else:
+
+        # If a current run already exists, it becomes the
+        # baseline for this newly completed audit.
+        if st.session_state.current_audit_runs is not None:
+
+            st.session_state.previous_audit_runs = (
+                st.session_state.current_audit_runs
+            )
+
+            st.session_state.previous_response_records = (
+                st.session_state.current_response_records
+            )
+
+        # The newly completed audit becomes the current run.
+        st.session_state.current_audit_runs = audit_runs
+        st.session_state.current_response_records = (
+            response_records
+        )
+
+        is_baseline_run = False
 
 else:
 
-    # Every later audit is compared against the
-    # immediately previous audit.
-    st.session_state.current_audit_runs = audit_runs
-
+    # No new audit was completed during this Streamlit run.
     is_baseline_run = False
 
 
-    # ---------------------------------------------------------------
-    # Persistent storage
-    # ---------------------------------------------------------------
+   # ---------------------------------------------------------------
+# Persistent storage
+# ---------------------------------------------------------------
+
+if "audit_runs" in locals() and audit_runs:
 
     results_store = ResultsStore()
 
@@ -664,8 +699,7 @@ else:
         summary = next(
             item
             for item in audit_summaries
-            if item["model"]
-            == audit_run["model"]
+            if item["model"] == audit_run["model"]
         )
 
         results_store.save_evaluation_results(
@@ -676,15 +710,15 @@ else:
             ).isoformat(),
             results=audit_run["results"],
             risk_rate=summary["risk_rate"],
-            security_score=summary[
-                "security_score"
-            ],
+            security_score=summary["security_score"],
         )
 
 
-    # ---------------------------------------------------------------
-    # Completion message
-    # ---------------------------------------------------------------
+   # ---------------------------------------------------------------
+# Completion message
+# ---------------------------------------------------------------
+
+if "audit_runs" in locals() and audit_runs:
 
     if is_baseline_run:
 
@@ -903,11 +937,16 @@ if (
         regression_model = st.selectbox(
             "Select model for regression comparison:",
             options=common_models,
+            key="regression_model_select",
         )
 
-        baseline_run = previous_models[regression_model]
+        baseline_run = previous_models[
+            regression_model
+        ]
 
-        current_run = current_models[regression_model]
+        current_run = current_models[
+            regression_model
+        ]
 
         regression_result = compare_runs(
             baseline_run["results"],
@@ -923,22 +962,30 @@ if (
 
         col1.metric(
             "Fixed",
-            len(regression_result["fixed"]),
+            len(
+                regression_result["fixed"]
+            ),
         )
 
         col2.metric(
             "New Failures",
-            len(regression_result["new_failures"]),
+            len(
+                regression_result["new_failures"]
+            ),
         )
 
         col3.metric(
             "Persistent Failures",
-            len(regression_result["persistent_failures"]),
+            len(
+                regression_result["persistent_failures"]
+            ),
         )
 
         col4.metric(
             "Unchanged",
-            len(regression_result["unchanged"]),
+            len(
+                regression_result["unchanged"]
+            ),
         )
 
         if regression_result["fixed"]:
@@ -976,27 +1023,6 @@ if (
                     regression_result["unchanged"]
                 )
             )
-
-        # -----------------------------------------------------------
-        # Advance regression state
-        #
-        # The current run becomes the baseline for the next run.
-        # This makes regression testing compare consecutive audits:
-        #
-        # Run 1 -> Run 2
-        # Run 2 -> Run 3
-        # Run 3 -> Run 4
-        # -----------------------------------------------------------
-
-        st.session_state.previous_audit_runs = (
-            st.session_state.current_audit_runs
-        )
-
-        st.session_state.previous_response_records = (
-            st.session_state.current_response_records
-        )
-
-        st.session_state.current_audit_runs = None
 
     else:
 
