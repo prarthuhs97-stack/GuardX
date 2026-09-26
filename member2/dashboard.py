@@ -351,17 +351,51 @@ elif not is_custom_audit and not selected_test_cases:
 
 st.subheader("Model Selection")
 
+# Streamlit Cloud cannot access a local Ollama server.
+# Ollama models are therefore exposed only when Ollama is available.
+def ollama_available() -> bool:
+    try:
+        import ollama
+
+        ollama.list()
+        return True
+    except Exception:
+        return False
+
+
+CLOUD_MODELS = [
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+]
+
+LOCAL_OLLAMA_MODELS = [
+    "qwen2.5:0.5b",
+    "gemma3:1b",
+]
+
+ollama_is_available = ollama_available()
+
+if ollama_is_available:
+    available_models = CLOUD_MODELS + LOCAL_OLLAMA_MODELS
+
+    st.caption(
+        "☁️ Groq models and 🖥️ local Ollama models are available."
+    )
+else:
+    available_models = CLOUD_MODELS
+
+    st.caption(
+        "☁️ Cloud mode: Groq models are available. "
+        "Local Ollama models are unavailable in this environment."
+    )
+
 selected_models = st.multiselect(
     "Select model(s) to test:",
-    options=[
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-120b",
-        "qwen2.5:0.5b",
-        "gemma3:1b",
-    ],
+    options=available_models,
     help=(
         "Groq models run through the Groq API. "
-        "Qwen and Gemma run locally through Ollama."
+        "Ollama models are available only when a local Ollama server "
+        "is accessible."
     ),
 )
 
@@ -481,8 +515,10 @@ if st.button(
 
             if model_name.startswith("openai/"):
               model = GroqAdapter(model_name)
-            else:
+            elif model_name in LOCAL_OLLAMA_MODELS:
               model = OllamaAdapter(model_name)
+            else:
+              raise ValueError(f"Unsupported model: {model_name}")
 
             # -------------------------------------------------------
             # Custom prompt:
